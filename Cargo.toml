@@ -1,0 +1,22 @@
+[package]
+name = "kf-feeder"
+version = "0.0.0"
+authors = ["Yu Onaga <ursus.cauda.elongata@gmail.com>"]
+license = "AGPL-3.0-only"
+edition = "2018"
+publish = false
+description = """
+A Web application that converts Kemono Friends-related Web pages to Atom feeds.
+"""
+
+[dependencies]
+auto_enums = { version = "0.5", features = ["futures01"] }
+failure = "0.1"
+futures = "0.1"
+hyper = "0.12"
+json = { version = "1.0", package = "serde_json" }
+reqwest = "0.9"
+serde = { version = "1", features = ["derive"] }
+structopt = "0.2"
+tokio = "0.1"
+xml = { version = "0.14", package = "quick-xml" }
