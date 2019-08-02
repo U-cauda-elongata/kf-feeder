@@ -5,7 +5,7 @@ use hyper::{
     header::{HeaderValue, ACCEPT_ENCODING, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST, RANGE},
     Body, Request, Response, StatusCode,
 };
-use reqwest::r#async::{Client, Request as Reqwest};
+use reqwest::r#async::{Client, Decoder, Request as Reqwest, Response as Reswponse};
 
 use crate::{
     transcode::{self, Transcode},
@@ -26,88 +26,101 @@ pub fn route(
             .unwrap())
     });
 
-    let parts = request.into_parts().0;
+    let mut parts = request.into_parts().0;
 
-    match parts.method {
-        hyper::Method::GET | hyper::Method::HEAD => {}
+    let head = match parts.method {
+        hyper::Method::HEAD => true,
+        hyper::Method::GET => false,
         _ => return not_found,
-    }
+    };
 
-    let url_str = match parts.uri.path_and_query() {
+    let url: url::Url = match parts.uri.path_and_query() {
         None => return not_found,
         Some(ref paq) if !paq.as_str().starts_with("/") => return not_found,
-        Some(paq) => &paq.as_str()[1..],
-    };
-    let url = match url_str.parse() {
-        Ok(url) => url,
-        Err(_) => return not_found,
+        Some(paq) => match paq.as_str()[1..].parse() {
+            Ok(url) => url,
+            Err(_) => return not_found,
+        },
     };
 
-    let mut reqwest = Reqwest::new(parts.method, url);
-    *reqwest.headers_mut() = parts.headers;
+    parts.headers.remove(HOST);
+    parts.headers.remove(RANGE);
+    parts.headers.remove(ACCEPT_ENCODING);
+    let reqwest = |url| {
+        let mut reqwest = Reqwest::new(parts.method, url);
+        *reqwest.headers_mut() = parts.headers;
+        client.execute(reqwest).map_err(Into::into)
+    };
 
-    match url_str {
-        "https://kemono-friends.sega.jp/news/articles.json" => proxy_response(
-            client,
-            reqwest,
-            transcode::kemono_friends_sega_jp::Transcode,
-        ),
-        _ => not_found,
+    match &url[..url::Position::AfterPath] {
+        "https://kemono-friends.sega.jp/news/articles.json" => {
+            return reqwest(url).and_then(move |resw| {
+                proxy_response(transcode::kemono_friends_sega_jp::Transcode, resw, head)
+            })
+        }
+        "https://www.kadokawa.co.jp/json.jsp" => {
+            if let Some(q) = url.query() {
+                for pair in q.split('&') {
+                    if pair.starts_with("id=") {
+                        if pair[3..] == *"342" {
+                            return reqwest(url).and_then(move |resw| {
+                                proxy_response(transcode::kadokawa_co_jp::Transcode, resw, head)
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
+
+    return not_found;
 }
 
 fn proxy_response<T>(
-    client: &Client,
-    mut reqw: Reqwest,
     transcode: T,
-) -> impl Future<Item = Response<Body>, Error = failure::Error>
+    mut resw: Reswponse,
+    head: bool,
+) -> Result<Response<Body>, failure::Error>
 where
     T: Transcode + Send + 'static,
     T::Future: Send + 'static,
     T::Error: Display,
 {
-    let head = reqw.method() == reqwest::Method::HEAD;
+    let mut res = Response::builder();
+    let headers = res.headers_mut().unwrap();
+    mem::swap(headers, resw.headers_mut());
 
-    reqw.headers_mut().remove(HOST);
-    reqw.headers_mut().remove(RANGE);
-    reqw.headers_mut().remove(ACCEPT_ENCODING);
+    match resw.status() {
+        StatusCode::OK => {
+            let body = if head {
+                Body::default()
+            } else {
+                let (tx, body) = Body::channel();
+                tokio::spawn(lazy(move || {
+                    let body = mem::replace(resw.body_mut(), Decoder::empty());
+                    let mut w = SinkWrite::new(tx);
+                    transcode
+                        .transcode(resw.url(), body, &mut w)
+                        .into_future()
+                        .map_err(eprintln)
+                        .and_then(move |()| {
+                            w.flush().map_err(eprintln)?;
+                            w.close().map_err(eprintln)
+                        })
+                }));
+                body
+            };
 
-    let fut = client.execute(reqw).map_err(Into::into);
-    fut.and_then(move |mut resw| {
-        let mut res = Response::builder();
-        let headers = res.headers_mut().unwrap();
-        mem::swap(headers, resw.headers_mut());
+            headers.remove(CONNECTION);
+            headers.remove(CONTENT_LENGTH);
+            let content_type = "application/atom+xml;charset=UTF-8";
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
 
-        match resw.status() {
-            StatusCode::OK => {
-                let body = if head {
-                    Body::default()
-                } else {
-                    let (tx, body) = Body::channel();
-                    tokio::spawn(lazy(move || {
-                        let mut w = SinkWrite::new(tx);
-                        transcode
-                            .transcode(resw.into_body(), &mut w)
-                            .into_future()
-                            .map_err(eprintln)
-                            .and_then(move |()| {
-                                w.flush().map_err(eprintln)?;
-                                w.close().map_err(eprintln)
-                            })
-                    }));
-                    body
-                };
-
-                headers.remove(CONNECTION);
-                headers.remove(CONTENT_LENGTH);
-                let content_type = "application/atom+xml;charset=UTF-8";
-                headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
-
-                Ok(res.body(body)?)
-            }
-            s => Ok(res.status(s).body(Body::default())?),
+            Ok(res.body(body)?)
         }
-    })
+        s => Ok(res.status(s).body(Body::default())?),
+    }
 }
 
 fn eprintln<T: Display>(t: T) {

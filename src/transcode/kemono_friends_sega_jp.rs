@@ -4,11 +4,12 @@ use std::{
 };
 
 use futures::{future::FutureResult, IntoFuture, Stream};
+use reqwest::Url;
 use serde::{
     de::{self, DeserializeSeed, Error as _},
     Deserialize,
 };
-use xml::events::{BytesDecl, BytesStart, BytesText, Event};
+use xml::events::{BytesStart, BytesText, Event};
 
 use crate::util::IterRead;
 
@@ -18,7 +19,12 @@ impl super::Transcode for Transcode {
     type Future = FutureResult<(), failure::Error>;
     type Error = failure::Error;
 
-    fn transcode<W: Write>(&self, input: reqwest::r#async::Decoder, output: W) -> Self::Future {
+    fn transcode<W: Write>(
+        &self,
+        _: &Url,
+        input: reqwest::r#async::Decoder,
+        output: W,
+    ) -> Self::Future {
         let mut d = json::Deserializer::from_reader(IterRead::new(input.wait()));
         Transcoder::new(output)
             .deserialize(&mut d)
@@ -91,11 +97,7 @@ impl<'de, W: Write> DeserializeSeed<'de> for DeserializeArticles<W> {
                 write!(f, "an array")
             }
             fn visit_seq<A: de::SeqAccess<'de>>(mut self, mut a: A) -> Result<(), A::Error> {
-                self.0
-                    .write_event(&Event::Decl(BytesDecl::new(b"1.0", Some(b"utf-8"), None)))
-                    .map_err(de::Error::custom)?;
-                let tag = BytesStart::borrowed(br#"feed xmlns="http://www.w3.org/2005/Atom""#, 4);
-                tag!(self.0, tag => {
+                feed!(self.0 => {
                     tag!(self.0, BytesStart::borrowed_name(b"title") => {
                         self.0.write_event(&Event::Text(
                             BytesText::from_escaped_str("けものフレンズ３")

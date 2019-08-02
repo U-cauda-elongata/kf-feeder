@@ -8,11 +8,9 @@ use futures::sink::{Sink, Wait};
 
 macro_rules! tag {
     ($writer:expr, $start:expr => $body:expr) => {{
-        use xml::events::{BytesEnd, BytesStart, Event};
-
-        let start = Event::Start($start);
-        let end = if let Event::Start(ref tag) = start {
-            Event::End(BytesEnd::borrowed(tag.name()))
+        let start = xml::events::Event::Start($start);
+        let end = if let xml::events::Event::Start(ref tag) = start {
+            xml::events::Event::End(xml::events::BytesEnd::borrowed(tag.name()))
         } else {
             unreachable!();
         };
@@ -20,6 +18,18 @@ macro_rules! tag {
         $writer.write_event(&start).map_err(de::Error::custom)?;
         $body;
         $writer.write_event(&end).map_err(de::Error::custom)?;
+    }};
+}
+
+macro_rules! feed {
+    ($writer:expr => $body:expr) => {{
+        $writer
+            .write_event(&xml::events::Event::Decl(
+                xml::events::BytesDecl::new(b"1.0", Some(b"utf-8"), None)
+            ))
+            .map_err(de::Error::custom)?;
+        let tag = xml::events::BytesStart::borrowed(br#"feed xmlns="http://www.w3.org/2005/Atom""#, 4);
+        tag!($writer, tag => $body);
     }};
 }
 

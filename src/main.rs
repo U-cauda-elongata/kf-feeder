@@ -12,7 +12,10 @@ use reqwest::r#async::Client;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "example", about = "A Web application that converts Kemono Friends-related Web pages to Atom feeds.")]
+#[structopt(
+    name = "example",
+    about = "A Web application that converts Kemono Friends-related Web pages to Atom feeds."
+)]
 struct Opt {
     /// Host name for the HTTP server
     #[structopt(default_value = "127.0.0.1")]
