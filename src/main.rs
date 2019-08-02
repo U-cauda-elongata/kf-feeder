@@ -13,7 +13,7 @@ use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(
-    name = "example",
+    name = "kf-pipitor",
     about = "A Web application that converts Kemono Friends-related Web pages to Atom feeds."
 )]
 struct Opt {
