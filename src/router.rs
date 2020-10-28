@@ -36,7 +36,7 @@ pub fn route(
 
     let url: url::Url = match parts.uri.path_and_query() {
         None => return not_found,
-        Some(ref paq) if !paq.as_str().starts_with("/") => return not_found,
+        Some(ref paq) if !paq.as_str().starts_with('/') => return not_found,
         Some(paq) => match paq.as_str()[1..].parse() {
             Ok(url) => url,
             Err(_) => return not_found,
@@ -61,12 +61,10 @@ pub fn route(
         "https://www.kadokawa.co.jp/json.jsp" => {
             if let Some(q) = url.query() {
                 for pair in q.split('&') {
-                    if pair.starts_with("id=") {
-                        if pair[3..] == *"342" {
-                            return reqwest(url).and_then(move |resw| {
-                                proxy_response(transcode::kadokawa_co_jp::Transcode, resw, head)
-                            });
-                        }
+                    if pair.starts_with("id=") && pair[3..] == *"342" {
+                        return reqwest(url).and_then(move |resw| {
+                            proxy_response(transcode::kadokawa_co_jp::Transcode, resw, head)
+                        });
                     }
                 }
             }

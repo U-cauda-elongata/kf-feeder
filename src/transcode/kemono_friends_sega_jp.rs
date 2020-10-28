@@ -66,10 +66,10 @@ impl<'de, W: Write> DeserializeSeed<'de> for Transcoder<W> {
                     if let Key::Articles = key {
                         return a
                             .next_value_seed(DeserializeArticles(self.0))
-                            .and_then(|ret| {
+                            .and_then(|()| {
                                 while let Some((de::IgnoredAny, de::IgnoredAny)) = a.next_entry()? {
                                 }
-                                Ok(ret)
+                                Ok(())
                             });
                     } else {
                         a.next_value::<de::IgnoredAny>()?;
