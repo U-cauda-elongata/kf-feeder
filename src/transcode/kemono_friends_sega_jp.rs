@@ -11,7 +11,7 @@ use serde::{
 };
 use xml::events::{BytesStart, BytesText, Event};
 
-use crate::util::IterRead;
+use crate::util::{feed, tag, IterRead};
 
 pub struct Transcode;
 
@@ -97,23 +97,32 @@ impl<'de, W: Write> DeserializeSeed<'de> for DeserializeArticles<W> {
                 write!(f, "an array")
             }
             fn visit_seq<A: de::SeqAccess<'de>>(mut self, mut a: A) -> Result<(), A::Error> {
-                feed!(self.0 => {
-                    tag!(self.0, BytesStart::borrowed_name(b"title") => {
-                        self.0.write_event(&Event::Text(
-                            BytesText::from_escaped_str("けものフレンズ３")
-                        )).map_err(de::Error::custom)?;
-                    });
-                    self.0.write_event(Event::Empty(
-                        BytesStart::borrowed(br#"link href="https://kemono-friends.sega.jp/""#, 4)
-                    )).map_err(de::Error::custom)?;
-                    // tag!(self.0, BytesStart::borrowed_name(b"updated") => {});
-                    tag!(self.0, BytesStart::borrowed_name(b"id") => {
+                feed(&mut self.0, |writer| {
+                    tag(writer, BytesStart::borrowed_name(b"title"), |writer| {
+                        writer
+                            .write_event(&Event::Text(BytesText::from_escaped_str(
+                                "けものフレンズ３",
+                            )))
+                            .map_err(de::Error::custom)?;
+                        Ok(())
+                    })?;
+                    writer
+                        .write_event(Event::Empty(BytesStart::borrowed(
+                            br#"link href="https://kemono-friends.sega.jp/""#,
+                            4,
+                        )))
+                        .map_err(de::Error::custom)?;
+                    // tag(writer, BytesStart::borrowed_name(b"updated"), |writer| Ok(()))?;
+                    tag(writer, BytesStart::borrowed_name(b"id"), |writer| {
                         const ID: &str = "tag:ursus.cauda.elongata@gmail.com,2019:proxy:https://kemono-friends.sega.jp/";
-                        self.0.write_event(Event::Text(BytesText::from_escaped_str(ID))).map_err(de::Error::custom)?;
-                    });
-                    while let Some(()) = a.next_element_seed(DeserializeArticle(&mut self.0))? {}
-                });
-                Ok(())
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped_str(ID)))
+                            .map_err(de::Error::custom)?;
+                        Ok(())
+                    })?;
+                    while let Some(()) = a.next_element_seed(DeserializeArticle(writer))? {}
+                    Ok(())
+                })
             }
         }
 
@@ -140,7 +149,7 @@ impl<'de, 'a, W: Write> de::Visitor<'de> for ArticleVisitor<'a, W> {
         write!(f, "a map")
     }
 
-    fn visit_map<A: de::MapAccess<'de>>(self, mut a: A) -> Result<(), A::Error> {
+    fn visit_map<A: de::MapAccess<'de>>(mut self, mut a: A) -> Result<(), A::Error> {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
         enum Key {
@@ -153,48 +162,65 @@ impl<'de, 'a, W: Write> de::Visitor<'de> for ArticleVisitor<'a, W> {
             Other,
         }
 
-        tag!(self.0, BytesStart::borrowed_name(b"entry") => {
+        tag(&mut self.0, BytesStart::borrowed_name(b"entry"), |writer| {
             while let Some(key) = a.next_key::<Key>()? {
                 match key {
                     Key::Id => {
                         let id = a.next_value::<String>()?;
-                        tag!(self.0, BytesStart::borrowed_name(b"id") => {
+                        tag(writer, BytesStart::borrowed_name(b"id"), |writer| {
                             let id = format!("tag:ursus.cauda.elongata@gmail.com,2019:proxy:https://kemono-friends.sega.jp/news/{}/", id);
-                            self.0.write_event(&Event::Text(BytesText::from_plain_str(&id))).map_err(de::Error::custom)?;
-                        });
+                            writer
+                                .write_event(&Event::Text(BytesText::from_plain_str(&id)))
+                                .map_err(de::Error::custom)?;
+                            Ok(())
+                        })?;
                         let mut link = BytesStart::borrowed_name(b"link");
                         let href = format!("https://kemono-friends.sega.jp/news/{}/", id);
                         link.push_attribute(("href", &*href));
-                        self.0.write_event(&Event::Empty(link)).map_err(de::Error::custom)?;
-                    },
+                        writer
+                            .write_event(&Event::Empty(link))
+                            .map_err(de::Error::custom)?;
+                    }
                     Key::Categories => {
                         for c in &a.next_value::<Vec<String>>()? {
                             let mut category = BytesStart::borrowed_name(b"category");
                             category.push_attribute(("term", &**c));
-                            self.0.write_event(&Event::Empty(category)).map_err(de::Error::custom)?;
+                            writer
+                                .write_event(&Event::Empty(category))
+                                .map_err(de::Error::custom)?;
                         }
                     }
-                    Key::Title => tag!(self.0, BytesStart::borrowed_name(b"title") => {
+                    Key::Title => tag(writer, BytesStart::borrowed_name(b"title"), |writer| {
                         let title = a.next_value::<String>()?;
-                        self.0.write_event(&Event::Text(BytesText::from_plain_str(&title))).map_err(de::Error::custom)?;
-                    }),
-                    Key::Date => tag!(self.0, BytesStart::borrowed_name(b"published") => {
+                        writer
+                            .write_event(&Event::Text(BytesText::from_plain_str(&title)))
+                            .map_err(de::Error::custom)?;
+                        Ok(())
+                    })?,
+                    Key::Date => tag(writer, BytesStart::borrowed_name(b"published"), |writer| {
                         let mut date = a.next_value::<String>()?;
                         date.push_str("+09:00");
-                        self.0.write_event(&Event::Text(BytesText::from_plain_str(&date))).map_err(de::Error::custom)?;
-                    }),
-                    Key::Modified => tag!(self.0, BytesStart::borrowed_name(b"updated") => {
-                        let mut modified = a.next_value::<String>()?;
-                        modified.push_str("+09:00");
-                        self.0.write_event(&Event::Text(BytesText::from_plain_str(&modified))).map_err(de::Error::custom)?;
-                    }),
+                        writer
+                            .write_event(&Event::Text(BytesText::from_plain_str(&date)))
+                            .map_err(de::Error::custom)?;
+                        Ok(())
+                    })?,
+                    Key::Modified => {
+                        tag(writer, BytesStart::borrowed_name(b"updated"), |writer| {
+                            let mut modified = a.next_value::<String>()?;
+                            modified.push_str("+09:00");
+                            writer
+                                .write_event(&Event::Text(BytesText::from_plain_str(&modified)))
+                                .map_err(de::Error::custom)?;
+                            Ok(())
+                        })?
+                    }
                     Key::Other => {
                         a.next_value::<de::IgnoredAny>()?;
                     }
                 }
             }
-        });
-
-        Ok(())
+            Ok(())
+        })
     }
 }

@@ -5,33 +5,8 @@ use std::{
 };
 
 use futures::sink::{Sink, Wait};
-
-macro_rules! tag {
-    ($writer:expr, $start:expr => $body:expr) => {{
-        let start = xml::events::Event::Start($start);
-        let end = if let xml::events::Event::Start(ref tag) = start {
-            xml::events::Event::End(xml::events::BytesEnd::borrowed(tag.name()))
-        } else {
-            unreachable!();
-        };
-
-        $writer.write_event(&start).map_err(de::Error::custom)?;
-        $body;
-        $writer.write_event(&end).map_err(de::Error::custom)?;
-    }};
-}
-
-macro_rules! feed {
-    ($writer:expr => $body:expr) => {{
-        $writer
-            .write_event(&xml::events::Event::Decl(
-                xml::events::BytesDecl::new(b"1.0", Some(b"utf-8"), None)
-            ))
-            .map_err(de::Error::custom)?;
-        let tag = xml::events::BytesStart::borrowed(br#"feed xmlns="http://www.w3.org/2005/Atom""#, 4);
-        tag!($writer, tag => $body);
-    }};
-}
+use serde::de;
+use xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 pub struct IterRead<I, B> {
     iter: I,
@@ -105,4 +80,37 @@ where
             .flush()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
+}
+
+pub fn tag<W, F, E>(writer: &mut xml::Writer<W>, start: BytesStart, body: F) -> Result<(), E>
+where
+    W: Write,
+    F: FnOnce(&mut xml::Writer<W>) -> Result<(), E>,
+    E: de::Error,
+{
+    let start = Event::Start(start);
+    let end = if let Event::Start(ref tag) = start {
+        xml::events::Event::End(BytesEnd::borrowed(tag.name()))
+    } else {
+        unreachable!();
+    };
+
+    writer.write_event(&start).map_err(E::custom)?;
+    body(writer)?;
+    writer.write_event(&end).map_err(E::custom)?;
+
+    Ok(())
+}
+
+pub fn feed<W, F, E>(writer: &mut xml::Writer<W>, body: F) -> Result<(), E>
+where
+    W: Write,
+    F: FnOnce(&mut xml::Writer<W>) -> Result<(), E>,
+    E: de::Error,
+{
+    writer
+        .write_event(&Event::Decl(BytesDecl::new(b"1.0", Some(b"utf-8"), None)))
+        .map_err(de::Error::custom)?;
+    let start = BytesStart::borrowed(br#"feed xmlns="http://www.w3.org/2005/Atom""#, 4);
+    tag(writer, start, body)
 }
