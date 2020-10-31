@@ -45,7 +45,9 @@ pub async fn route(request: Request<Body>, client: Client) -> anyhow::Result<Res
         client.execute(reqwest)
     };
 
-    match &url[..url::Position::AfterPath] {
+    let path = &url[..url::Position::AfterPath];
+
+    match path {
         "https://kemono-friends.sega.jp/news/articles.json" => {
             let resw = reqwest(url).await?;
             return proxy_response(transcode::kemono_friends_sega_jp::Transcode, resw, head);
@@ -61,6 +63,17 @@ pub async fn route(request: Request<Body>, client: Client) -> anyhow::Result<Res
             }
         }
         _ => {}
+    }
+
+    const PREFIX: &str = "https://www.jvcmusic.co.jp/-/News/A";
+    if path.starts_with(PREFIX)
+        && path.as_bytes()[PREFIX.len()..][..6]
+            .iter()
+            .all(|c| c.is_ascii_digit())
+        && path[(PREFIX.len() + 6)..] == *".json"
+    {
+        let resw = reqwest(url).await?;
+        return proxy_response(transcode::jvcmusic_co_jp::Transcode, resw, head);
     }
 
     not_found()

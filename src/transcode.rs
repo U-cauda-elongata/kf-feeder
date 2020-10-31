@@ -1,3 +1,4 @@
+pub mod jvcmusic_co_jp;
 pub mod kadokawa_co_jp;
 pub mod kemono_friends_sega_jp;
 
