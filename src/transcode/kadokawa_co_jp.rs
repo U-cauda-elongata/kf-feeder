@@ -1,9 +1,12 @@
 use std::{
     fmt::{self, Formatter},
     io::Write,
+    marker::Unpin,
 };
 
-use futures::{future::FutureResult, IntoFuture, Stream};
+use bytes::Bytes;
+use futures::Stream;
+use hyper::body::Sender;
 use reqwest::Url;
 use serde::{
     de::{self, DeserializeSeed},
@@ -11,42 +14,38 @@ use serde::{
 };
 use xml::events::{BytesStart, BytesText, Event};
 
-use crate::util::{feed, tag, IterRead};
+use crate::util::*;
 
 pub struct Transcode;
 
 impl super::Transcode for Transcode {
-    type Future = FutureResult<(), failure::Error>;
-    type Error = failure::Error;
+    type Future = JoinHandle<json::Result<()>>;
+    type Error = json::Error;
 
-    fn transcode<W: Write>(
-        &self,
-        url: &Url,
-        input: reqwest::r#async::Decoder,
-        output: W,
-    ) -> Self::Future {
-        let mut d = json::Deserializer::from_reader(IterRead::new(input.wait()));
-        Transcoder::new(output, url)
-            .deserialize(&mut d)
-            .map_err(Into::into)
-            .into_future()
+    fn transcode<I>(&self, url: Url, input: I, output: Sender) -> Self::Future
+    where
+        I: Stream<Item = reqwest::Result<Bytes>> + Send + Unpin + 'static,
+    {
+        let mut d = json::Deserializer::from_reader(StreamRead::new(input));
+        let t = Transcoder::new(BodyWrite::new(output), url);
+        JoinHandle(tokio::task::spawn_blocking(move || t.deserialize(&mut d)))
     }
 }
 
-struct Transcoder<'a, W: Write>(xml::Writer<W>, &'a Url);
+struct Transcoder<W: Write>(xml::Writer<W>, Url);
 
-impl<'a, W: Write> Transcoder<'a, W> {
-    pub fn new(w: W, url: &'a Url) -> Self {
+impl<W: Write> Transcoder<W> {
+    pub fn new(w: W, url: Url) -> Self {
         Transcoder(xml::Writer::new(w), url)
     }
 }
 
-impl<'a, 'de, W: Write> DeserializeSeed<'de> for Transcoder<'a, W> {
+impl<'de, W: Write> DeserializeSeed<'de> for Transcoder<W> {
     type Value = ();
 
     fn deserialize<D: de::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
-        struct Visitor<'a, W: Write>(xml::Writer<W>, &'a Url);
-        impl<'a, 'de, W: Write> de::Visitor<'de> for Visitor<'a, W> {
+        struct Visitor<W: Write>(xml::Writer<W>, Url);
+        impl<'de, W: Write> de::Visitor<'de> for Visitor<W> {
             type Value = ();
 
             fn expecting(&self, f: &mut Formatter<'_>) -> fmt::Result {

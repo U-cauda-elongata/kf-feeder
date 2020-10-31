@@ -10,14 +10,15 @@ A Web application that converts Kemono Friends-related Web pages to Atom feeds.
 """
 
 [dependencies]
-auto_enums = { version = "0.5", features = ["futures01"] }
-failure = "0.1"
-futures = "0.1"
-hyper = "0.12"
+anyhow = "1"
+auto_enums = { version = "0.7" }
+bytes = "0.5"
+futures = "0.3"
+hyper = "0.13"
 json = { version = "1.0", package = "serde_json" }
-reqwest = "0.9"
+reqwest = { version = "0.10", features = ["stream"] }
 serde = { version = "1", features = ["derive"] }
-structopt = "0.2"
-tokio = "0.1"
-url = "1"
+structopt = "0.3"
+tokio = { version = "0.2", features = ["macros", "rt-core"] }
+url = "2"
 xml = { version = "0.14", package = "quick-xml" }

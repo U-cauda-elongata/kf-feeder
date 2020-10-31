@@ -1,43 +1,69 @@
 use std::{
     error::Error,
+    future::Future,
     io::{self, Read, Write},
+    marker::Unpin,
     ops::Deref,
+    pin::Pin,
+    task::{Context, Poll},
 };
 
-use futures::sink::{Sink, Wait};
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
+use hyper::body::Sender;
 use serde::de;
 use xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
-pub struct IterRead<I, B> {
-    iter: I,
+pub struct BodyWrite(Sender);
+
+impl BodyWrite {
+    pub fn new(sender: Sender) -> Self {
+        BodyWrite(sender)
+    }
+}
+
+impl Write for BodyWrite {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        futures::executor::block_on(self.0.send_data(Bytes::copy_from_slice(b)))
+            .map(|()| b.len())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct StreamRead<S, B> {
+    stream: S,
     buf: B,
     pos: usize,
 }
 
-impl<I, B, E> IterRead<I, B>
+impl<S, B, E> StreamRead<S, B>
 where
-    I: Iterator<Item = Result<B, E>>,
+    S: Stream<Item = Result<B, E>> + Unpin,
     B: Deref<Target = [u8]> + Default,
     E: Error + Send + Sync + 'static,
 {
-    pub fn new(iter: I) -> Self {
-        IterRead {
-            iter,
+    pub fn new(stream: S) -> Self {
+        StreamRead {
+            stream,
             buf: B::default(),
             pos: 0,
         }
     }
 }
 
-impl<I, B, E> Read for IterRead<I, B>
+impl<S, B, E> Read for StreamRead<S, B>
 where
-    I: Iterator<Item = Result<B, E>>,
+    S: Stream<Item = Result<B, E>> + Unpin,
     B: Deref<Target = [u8]>,
     E: Error + Send + Sync + 'static,
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         while self.buf.len() <= self.pos {
-            if let Some(b) = self.iter.next() {
+            if let Some(b) = futures::executor::block_on(self.stream.next()) {
                 self.buf = b.map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
                 self.pos = 0;
             } else {
@@ -51,34 +77,16 @@ where
     }
 }
 
-pub struct SinkWrite<S>(Wait<S>);
+pub struct JoinHandle<T>(pub tokio::task::JoinHandle<T>);
 
-impl<S: Sink> SinkWrite<S> {
-    pub fn new(sink: S) -> Self {
-        SinkWrite(sink.wait())
-    }
+impl<T> Future for JoinHandle<T> {
+    type Output = T;
 
-    pub fn close(&mut self) -> Result<(), S::SinkError> {
-        self.0.close()
-    }
-}
-
-impl<S: Sink> Write for SinkWrite<S>
-where
-    S::SinkItem: From<Vec<u8>>,
-    S::SinkError: Error + Send + Sync + 'static,
-{
-    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
-        self.0
-            .send(b.to_vec().into())
-            .map(|()| b.len())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0
-            .flush()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx).map(|result| match result {
+            Ok(t) => t,
+            Err(e) => std::panic::resume_unwind(e.try_into_panic().unwrap()),
+        })
     }
 }
 

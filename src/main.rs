@@ -4,11 +4,13 @@ mod util;
 mod router;
 mod transcode;
 
-use std::net::ToSocketAddrs;
+use std::{convert::Infallible, net::ToSocketAddrs};
 
-use futures::future::Future;
-use hyper::{service::service_fn, Server};
-use reqwest::r#async::Client;
+use hyper::{
+    service::{make_service_fn, service_fn},
+    Server,
+};
+use reqwest::Client;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -25,7 +27,8 @@ struct Opt {
     port: u16,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> hyper::Result<()> {
     let opt = Opt::from_args();
     let addr = (&*opt.host, opt.port)
         .to_socket_addrs()
@@ -33,11 +36,11 @@ fn main() {
         .next()
         .unwrap();
 
-    let server = Server::bind(&addr)
-        .serve(|| {
-            let client = Client::builder().referer(false).build().unwrap();
-            service_fn(move |req| router::route(req, &client))
-        })
-        .map_err(|e| eprintln!("Error: {}", e));
-    hyper::rt::run(server)
+    let client = Client::builder().referer(false).build().unwrap();
+    let new_service = make_service_fn(|_| {
+        let client = client.clone();
+        let service = service_fn(move |request| router::route(request, client.clone()));
+        async { Ok::<_, Infallible>(service) }
+    });
+    Server::bind(&addr).serve(new_service).await
 }

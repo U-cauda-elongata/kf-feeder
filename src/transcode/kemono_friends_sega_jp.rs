@@ -1,9 +1,12 @@
 use std::{
     fmt::{self, Formatter},
     io::Write,
+    marker::Unpin,
 };
 
-use futures::{future::FutureResult, IntoFuture, Stream};
+use bytes::Bytes;
+use futures::Stream;
+use hyper::body::Sender;
 use reqwest::Url;
 use serde::{
     de::{self, DeserializeSeed, Error as _},
@@ -11,25 +14,21 @@ use serde::{
 };
 use xml::events::{BytesStart, BytesText, Event};
 
-use crate::util::{feed, tag, IterRead};
+use crate::util::*;
 
 pub struct Transcode;
 
 impl super::Transcode for Transcode {
-    type Future = FutureResult<(), failure::Error>;
-    type Error = failure::Error;
+    type Future = JoinHandle<json::Result<()>>;
+    type Error = json::Error;
 
-    fn transcode<W: Write>(
-        &self,
-        _: &Url,
-        input: reqwest::r#async::Decoder,
-        output: W,
-    ) -> Self::Future {
-        let mut d = json::Deserializer::from_reader(IterRead::new(input.wait()));
-        Transcoder::new(output)
-            .deserialize(&mut d)
-            .map_err(Into::into)
-            .into_future()
+    fn transcode<I>(&self, _: Url, input: I, output: Sender) -> Self::Future
+    where
+        I: Stream<Item = reqwest::Result<Bytes>> + Send + Unpin + 'static,
+    {
+        let mut d = json::Deserializer::from_reader(StreamRead::new(input));
+        let t = Transcoder::new(BodyWrite::new(output));
+        JoinHandle(tokio::task::spawn_blocking(move || t.deserialize(&mut d)))
     }
 }
 
